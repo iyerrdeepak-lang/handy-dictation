@@ -1,4 +1,4 @@
-name: Build macOS app (Apple Silicon)
+name: Build macOS app
 
 # Builds Handy with dictation commands for Apple Silicon Macs and publishes the
 # app as a GitHub release, so it can be downloaded without building locally.
@@ -16,9 +16,21 @@ concurrency:
 
 jobs:
   build:
-    # Same runner Handy's own releases use for Apple Silicon (macOS 26 SDK
-    # includes Apple Intelligence).
-    runs-on: macos-26
+    # Apple Silicon runners are often capacity-constrained and can sit
+    # unassigned, so an Intel build (runs on Apple Silicon via Rosetta) is
+    # produced in parallel as a fallback. build.rs only builds the Apple
+    # Intelligence bridge on an arm64 host, so each runner builds natively.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            asset: Handy-dictation-macos-arm64.zip
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+            asset: Handy-dictation-macos-intel.zip
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -30,12 +42,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
+          key: ${{ matrix.runner }}
           cache-bin: false
 
       - name: Install frontend dependencies
@@ -48,33 +61,36 @@ jobs:
           HANDY_DISABLE_UPDATER: "1"
         run: >
           bun run tauri build
-          --target aarch64-apple-darwin
+          --target ${{ matrix.target }}
           --bundles app
           --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Package app
         run: |
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Handy.app"
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Handy.app"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
           # ditto keeps the bundle's symlinks and code signature intact.
-          ditto -c -k --sequesterRsrc --keepParent "$APP" Handy-dictation-macos-arm64.zip
-          ls -la Handy-dictation-macos-arm64.zip
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "${{ matrix.asset }}"
+          ls -la "${{ matrix.asset }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Handy-dictation-macos-arm64
-          path: Handy-dictation-macos-arm64.zip
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
-          gh release create "$TAG" Handy-dictation-macos-arm64.zip \
-            --target "${{ github.sha }}" \
-            --title "Handy 0.9.8 + dictation commands (build ${{ github.run_number }})" \
-            --notes "Apple Silicon build of Handy 0.9.8 with spoken dictation commands (period, comma, colon, new line, new paragraph, ...). Unsigned: on first launch, allow it in System Settings > Privacy & Security." \
-            --latest
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --target "${{ github.sha }}" \
+              --title "Handy 0.9.8 + dictation commands (build ${{ github.run_number }})" \
+              --notes "macOS build of Handy 0.9.8 with spoken dictation commands (period, comma, colon, new line, new paragraph, ...). Unsigned: on first launch, allow it in System Settings > Privacy & Security." \
+              --latest || true
+          fi
+          gh release upload "$TAG" "${{ matrix.asset }}" --clobber
