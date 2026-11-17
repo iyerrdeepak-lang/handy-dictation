@@ -16,10 +16,11 @@ concurrency:
 
 jobs:
   build:
-    # Apple Silicon runners are often capacity-constrained and can sit
-    # unassigned, so an Intel build (runs on Apple Silicon via Rosetta) is
-    # produced in parallel as a fallback. build.rs only builds the Apple
-    # Intelligence bridge on an arm64 host, so each runner builds natively.
+    # Apple Silicon runners are often capacity-constrained and a job can be
+    # cancelled unassigned, so the same arm64 app is requested from two
+    # arm64 runner pools at once. Both are native Apple Silicon builds (an
+    # Intel build runs CPU-only under Rosetta, far too slow). On macos-15,
+    # build.rs automatically falls back to the Apple Intelligence stub.
     strategy:
       fail-fast: false
       matrix:
@@ -27,9 +28,9 @@ jobs:
           - runner: macos-26
             target: aarch64-apple-darwin
             asset: Handy-dictation-macos-arm64.zip
-          - runner: macos-26-intel
-            target: x86_64-apple-darwin
-            asset: Handy-dictation-macos-intel.zip
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            asset: Handy-dictation-macos-arm64.zip
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
